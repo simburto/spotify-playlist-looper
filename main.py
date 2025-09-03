@@ -2,14 +2,15 @@ from flask import Flask, redirect, request, session, url_for, render_template_st
 import requests
 import base64
 import json
+import time
 
 app = Flask(__name__)
 app.secret_key = 'secret key'
 
 # Spotify API credentials
-CLIENT_ID = 'id'
-CLIENT_SECRET = 'secret key'
-REDIRECT_URI = 'http://127.0.0.1:5000/callback'
+CLIENT_ID = 'client id'
+CLIENT_SECRET = 'client secret'
+REDIRECT_URI = 'callback'
 SCOPE = ('user-read-private user-read-playback-state user-modify-playback-state user-read-currently-playing '
          'app-remote-control streaming playlist-read-private playlist-read-collaborative')
 
@@ -22,10 +23,10 @@ def home():
     return render_template_string('''
     <html>
     <head>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:400,700">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=JetBrains Mono">
         <style>
             body {
-                font-family: 'Roboto', sans-serif;
+                font-family: 'JetBrains Mono', sans-serif;
                 background-color: #121212;
                 color: white;
                 text-align: center;
@@ -40,11 +41,25 @@ def home():
             h1, h2 {
                 margin: 20px 0;
             }
+            button {
+                font-family: 'JetBrains Mono', sans-serif;
+                background-color: #1DB954;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                font-size: 16px;
+                cursor: pointer;
+                border-radius: 4px;
+                transition: background-color 0.3s;
+            }
+            button:hover {
+                background-color: #1ed760;
+            }
         </style>
     </head>
     <body>
-        <h1>Welcome to Spotify Authorization!</h1>
-        <a href="/login">Login with Spotify</a>
+        <h1>playlist looper</h1>
+        <a href="/login"><button>Login with Spotify</button></a>
     </body>
     </html>
     ''')
@@ -103,13 +118,16 @@ def profile():
         playlists.extend(playlist_data['items'])
         playlist_url = playlist_data.get('next')
 
+    # Check if a previous queue exists in the session
+    previous_queue_exists = 'selected_songs' in session and len(session.get('selected_songs', [])) > 0
+
     html = f'''
     <html>
     <head>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:400,700">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=JetBrains Mono">
         <style>
             body {{
-                font-family: 'Roboto', sans-serif;
+                font-family: 'JetBrains Mono', sans-serif;
                 background-color: #121212;
                 color: white;
                 text-align: left;
@@ -145,8 +163,8 @@ def profile():
                 display: flex;
                 align-items: center;
                 flex: 1;
-                text-decoration: none; /* Remove underline from links */
-                color: white; /* Ensure text color is white */
+                text-decoration: none;
+                color: white;
             }}
             .playlist-details {{
                 flex: 1;
@@ -156,21 +174,28 @@ def profile():
             .playlist-name {{
                 font-size: 16px;
                 margin: 0;
-                color: white; /* Set playlist name color to white */
+                color: white;
             }}
             .track-count {{
                 font-size: 14px;
-                color: lightgray; /* Set track count color to light gray */
+                color: lightgray;
                 margin: 0;
             }}
+            .buttons-container {{
+                display: flex;
+                gap: 10px;
+                margin-top: 20px;
+            }}
             button {{
+                font-family: 'JetBrains Mono', sans-serif;
                 background-color: #1DB954;
                 color: white;
                 border: none;
                 padding: 10px 20px;
                 font-size: 16px;
                 cursor: pointer;
-                margin-top: 20px;
+                border-radius: 4px;
+                transition: background-color 0.3s;
             }}
             button:hover {{
                 background-color: #1ed760;
@@ -181,10 +206,21 @@ def profile():
         <h1>Welcome, {profile_data["display_name"]}</h1>
         <img src="{profile_data["images"][0]["url"]}" alt="Profile Picture">
         <h2>Your Playlists:</h2>
+        <div class="buttons-container">
+            {'<a href="/reuse_queue"><button>Re-use Previous Queue</button></a>' if previous_queue_exists else ''}
+            <a href="/logout"><button>Logout</button></a>
+        </div>
         <ul>
     '''
     if playlists:
+        print(playlists)
+        playlists = [item for item in playlists if item is not None]
         for playlist in playlists:
+            if isinstance(playlists, dict):
+                 filtered_dict = {key: value for key, value in original_dict.items() if value is not None}
+            else:
+                 filtered_dict = {}
+            print(playlist)
             playlist_id = playlist['id']
             playlist_image = playlist['images'][0]['url'] if playlist['images'] else ''
             html += f'''
@@ -202,10 +238,23 @@ def profile():
     else:
         html += '<p>You have no playlists in your library.</p>'
 
-    html += '<a href="/logout"><button>Logout</button></a>'
     html += '</body></html>'
 
     return html
+
+
+@app.route('/reuse_queue')
+def reuse_queue():
+    access_token = session.get('access_token')
+    if not access_token:
+        return redirect(url_for('login'))
+
+    selected_songs = session.get('selected_songs')
+    if selected_songs:
+        start_playback(selected_songs, access_token)
+        return redirect(url_for('success'))
+    else:
+        return redirect(url_for('profile'))
 
 
 @app.route('/playlist/<playlist_id>', methods=['GET', 'POST'])
@@ -237,7 +286,7 @@ def playlist_tracks(playlist_id):
         end_index = int(request.form['end_song'])
 
         # Validate the indexes
-        if start_index >= 0 and end_index < len(tracks) and start_index < end_index:
+        if start_index >= 0 and end_index < len(tracks) and start_index <= end_index:
             selected_songs = [tracks[i]['track']['uri'] for i in range(start_index, end_index + 1)]
             session['selected_songs'] = selected_songs
             session['start_song'] = start_index
@@ -261,10 +310,10 @@ def playlist_tracks(playlist_id):
     html = f'''
     <html>
     <head>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:400,700">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=JetBrains Mono">
         <style>
             body {{
-                font-family: 'Roboto', sans-serif;
+                font-family: 'JetBrains Mono', sans-serif;
                 background-color: #121212;
                 color: white;
                 text-align: left;
@@ -276,8 +325,8 @@ def playlist_tracks(playlist_id):
                 margin-bottom: 20px;
             }}
             .cover {{
-                width: 150px; /* Set width for the playlist cover */
-                height: auto; /* Maintain aspect ratio */
+                width: 150px;
+                height: auto;
                 margin-right: 10px;
             }}
             .playlist-name {{
@@ -300,12 +349,12 @@ def playlist_tracks(playlist_id):
                 padding: 10px;
                 transition: opacity 0.3s ease;
                 z-index: 1000;
-                opacity: 0; /* Start hidden */
-                visibility: hidden; /* Start hidden */
+                opacity: 0;
+                visibility: hidden;
             }}
             .moving-header.visible {{
-                opacity: 1; /* Fade in */
-                visibility: visible; /* Make it visible */
+                opacity: 1;
+                visibility: visible;
             }}
             ul {{
                 list-style-type: none;
@@ -319,6 +368,7 @@ def playlist_tracks(playlist_id):
                 padding: 5px 10px;
                 cursor: pointer;
                 border-radius: 4px;
+                transition: background 0.3s;
             }}
             li:hover {{
                 background-color: #282828;
@@ -355,6 +405,7 @@ def playlist_tracks(playlist_id):
                 color: lightgray;
             }}
             button {{
+                font-family: 'JetBrains Mono', sans-serif;
                 background-color: #1DB954;
                 color: white;
                 border: none;
@@ -362,6 +413,7 @@ def playlist_tracks(playlist_id):
                 font-size: 16px;
                 cursor: pointer;
                 margin-top: 20px;
+                border-radius: 4px;
             }}
             button:hover {{
                 background-color: #1ed760;
@@ -397,18 +449,18 @@ def playlist_tracks(playlist_id):
 
         html += f'''
            <li onclick="selectSong({i})">
-               <div class="track-info">
-                   <img src="{track_image}" alt="Track Image">
-                   <div class="track-details">
-                       <p class="track-name">{track_name}</p>
-                       <p class="track-artist">{artist_name}</p>
-                   </div>
-               </div>
-               <div class="track-meta">
-                   <span>{album_name}</span>
-                   <span>{duration}</span>
-               </div>
-           </li>
+                <div class="track-info">
+                    <img src="{track_image}" alt="Track Image">
+                    <div class="track-details">
+                        <p class="track-name">{track_name}</p>
+                        <p class="track-artist">{artist_name}</p>
+                    </div>
+                </div>
+                <div class="track-meta">
+                    <span>{album_name}</span>
+                    <span>{duration}</span>
+                </div>
+            </li>
            '''
 
     html += '''
@@ -423,26 +475,28 @@ def playlist_tracks(playlist_id):
                 const trackList = document.querySelectorAll("#track-list li");
 
                 function selectSong(index) {
-                    if (startSong === null) {
-                        startSong = index;
-                        trackList[index].style.backgroundColor = 'lightgreen'; // Highlight start song
-                    } else if (endSong === null) {
-                        endSong = index;
-                        trackList[index].style.backgroundColor = 'lightcoral'; // Highlight end song
-                        // Reset start and end if start is greater than end
-                        if (startSong > endSong) {
-                            startSong = index;
-                            endSong = null;
-                            trackList[index].style.backgroundColor = 'lightgreen'; // Highlight new start song
-                        }
-                    } else {
-                        // Reset selection
-                        for (let i = 0; i < trackList.length; i++) {
-                            trackList[i].style.backgroundColor = '';
-                        }
+                    // Reset all colors
+                    for (let i = 0; i < trackList.length; i++) {
+                        trackList[i].style.backgroundColor = '';
+                    }
+
+                    if (startSong === null || (startSong !== null && endSong !== null)) {
                         startSong = index;
                         endSong = null;
-                        trackList[index].style.backgroundColor = 'lightgreen'; // Highlight start song
+                        trackList[index].style.backgroundColor = '#1DB954';
+                    } else if (endSong === null) {
+                        if (index < startSong) {
+                             endSong = startSong;
+                             startSong = index;
+                        } else {
+                            endSong = index;
+                        }
+
+                        for (let i = startSong; i <= endSong; i++) {
+                            trackList[i].style.backgroundColor = '#282828';
+                        }
+                        trackList[startSong].style.backgroundColor = '#1DB954';
+                        trackList[endSong].style.backgroundColor = '#1DB954';
                     }
 
                     document.getElementById("start_song").value = startSong;
@@ -450,11 +504,11 @@ def playlist_tracks(playlist_id):
                 }
 
                 const movingHeader = document.getElementById('moving-header');
-                const headerHeight = document.querySelector('.header').offsetHeight;
+                const header = document.querySelector('.header');
 
                 window.addEventListener('scroll', () => {
                     const scrollPos = window.scrollY;
-                    if (scrollPos > headerHeight) {
+                    if (scrollPos > header.offsetHeight) {
                         movingHeader.classList.add('visible');
                     } else {
                         movingHeader.classList.remove('visible');
@@ -471,22 +525,23 @@ def playlist_tracks(playlist_id):
 def start_playback(selected_songs, access_token):
     headers = {'Authorization': f'Bearer {access_token}'}
     requests.put('https://api.spotify.com/v1/me/player/repeat?state=context', headers=headers)
-
     payload = {
         'uris': selected_songs,
         'position_ms': 0
     }
     playback_url = 'https://api.spotify.com/v1/me/player/play'
     requests.put(playback_url, headers=headers, json=payload)
+
+
 @app.route('/success')
 def success():
     return render_template_string('''
     <html>
     <head>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:400,700">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=JetBrains Mono">
         <style>
             body {
-                font-family: 'Roboto', sans-serif;
+                font-family: 'JetBrains Mono';
                 background-color: #121212;
                 color: white;
                 text-align: center;
@@ -498,6 +553,20 @@ def success():
             }
             a:hover {
                 text-decoration: underline;
+            }
+            button {
+                font-family: 'JetBrains Mono', sans-serif;
+                background-color: #1DB954;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                font-size: 16px;
+                cursor: pointer;
+                border-radius: 4px;
+                transition: background-color 0.3s;
+            }
+            button:hover {
+                background-color: #1ed760;
             }
         </style>
     </head>
@@ -526,4 +595,4 @@ def stop_playback():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=8000)
